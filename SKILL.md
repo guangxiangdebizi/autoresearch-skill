@@ -45,6 +45,19 @@ This phase is the A+B hybrid. **Do not try to do everything in one big turn; ext
 - **Per-iteration subagent (B)** = worker. Each experiment iteration is delegated to a fresh `general-purpose` subagent. That subagent reads the MDs, runs one attempt, updates the MDs, returns a short report. Its context dies with it — the MDs are the hand-off medium.
 - **Parallel research subagents** = bonus. While a slow gate is running (e.g. 40-min Kaggle kernel), the main session can spawn additional subagents for data analysis, literature scan, or old-log mining. Their reports feed the NEXT iteration's design.
 
+**Brainstorm-subagent escape hatch (when you get stuck)**:
+
+When you're stuck mid-loop — ≥3 consecutive regressions against current best, single-knob sweep exhausted, or honestly "out of ideas" — **spawn a `general-purpose` subagent to brainstorm untried directions before pausing to ask the user**. The brainstorm subagent has fresh context and can catch mechanisms you've been ignoring for iterations (e.g. a classic training bug sitting in a stable "fixture" block that you've stopped re-reading).
+
+Brief it like a senior researcher joining the team cold:
+- Give it the state files (`state.json`, `plan.md`, `EXPERIMENTS.md`, `log.md`) and the editable source file path.
+- Show the score history as a table — what was tried, what the delta was.
+- List explicit constraints (quotas, runtime ceilings, rule compliance).
+- Ask for **concrete untried directions**, not restatements of what's been tried. Require file path + line number + rough cost + risk per direction. Cap output length (≤600 words) so the report fits back into main session context.
+- Allow it WebSearch/WebFetch for external references.
+
+After the report lands, **pick the highest-EV direction yourself** and resume the loop — the user wants coordination, not constant A/B/C/D prompts. Only escalate to the user when the brainstorm surfaces something that needs their judgment (e.g. scope change, rule ambiguity, offline-training access).
+
 **Each iteration (the subagent's 9 steps)**:
 1. Read `plan.md`, `CURRENT_STATUS.md`, `EXPERIMENTS.md`, and the latest gate log.
 2. Decide: same experiment family (new `vNN`) or new family (new `expN`)? Follow the experiment-ops-playbook versioning rules.
