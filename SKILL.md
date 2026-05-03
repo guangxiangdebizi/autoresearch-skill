@@ -36,6 +36,8 @@ When this skill activates, you are in planning mode. Your only job is conversati
 
 After drafting `plan.md`, show it to the user. They can edit verbally ("改第 4 条的预算为 6 小时"). Iterate until they explicitly say **"开始"** / **"start"** / **"confirm"** (or any unambiguous go-signal). That's the Phase 1 → 2 transition.
 
+At Phase 1 → 2 transition (after the user confirms), also create an **initial `RESEARCH.md`** — a short hypothesis-space sketch: what broad families of approaches could plausibly move the target, what each might reveal, which are probed / untouched. It's fine to be speculative here; this file is the loop's living map, not a deliverable. See the fresh-context innovation subagent section under Phase 2 for what goes in it and how it's used.
+
 ### Phase 2 — Autonomous execution (the loop)
 
 This phase is the A+B hybrid. **Do not try to do everything in one big turn; externalize state and hand off.**
@@ -45,7 +47,7 @@ This phase is the A+B hybrid. **Do not try to do everything in one big turn; ext
 - **Per-iteration subagent (B)** = worker. Each experiment iteration is delegated to a fresh `general-purpose` subagent. That subagent reads the MDs, runs one attempt, updates the MDs, returns a short report. Its context dies with it — the MDs are the hand-off medium.
 - **Parallel research subagents** = bonus. While a slow gate is running (e.g. 40-min Kaggle kernel), the main session can spawn additional subagents for data analysis, literature scan, or old-log mining. Their reports feed the NEXT iteration's design.
 
-**Brainstorm-subagent escape hatch (when you get stuck)**:
+**Brainstorm-subagent escape hatch (tactical — when you get stuck)**:
 
 When you're stuck mid-loop — ≥3 consecutive regressions against current best, single-knob sweep exhausted, or honestly "out of ideas" — **spawn a `general-purpose` subagent to brainstorm untried directions before pausing to ask the user**. The brainstorm subagent has fresh context and can catch mechanisms you've been ignoring for iterations (e.g. a classic training bug sitting in a stable "fixture" block that you've stopped re-reading).
 
@@ -57,6 +59,35 @@ Brief it like a senior researcher joining the team cold:
 - Allow it WebSearch/WebFetch for external references.
 
 After the report lands, **pick the highest-EV direction yourself** and resume the loop — the user wants coordination, not constant A/B/C/D prompts. Only escalate to the user when the brainstorm surfaces something that needs their judgment (e.g. scope change, rule ambiguity, offline-training access).
+
+**Fresh-context innovation subagent (strategic — escape local optima)**:
+
+The brainstorm hatch above reads full state. That's good for tactical "what's the best next adjacent step" — but after 15-20 iterations anchored to one baseline, the project's entire thinking is gravitationally bound to the current local optimum. Even a freshly spawned brainstorm subagent inherits that bias as soon as it reads `EXPERIMENTS.md` / `log.md`: the narrative of what's been tried implicitly constrains what it imagines next. This is exactly how a loop gets stuck oscillating around a 0.63 plateau.
+
+To give the loop a real chance at finding a **global** optimum (not just polishing the current local one), maintain a **high-level research map** in `RESEARCH.md` and periodically hand it — and nothing else — to a subagent with a clean context.
+
+**`RESEARCH.md` contents** (abstract-only — no iteration numbers, no version configs, no gate IDs):
+- The research question in one paragraph.
+- The **hypothesis space**: major families of approaches that could move the target (e.g. "data quality", "optimizer choice", "architecture tweaks", "regularization", "inference-time mechanisms", "problem reframing"). For each family: one-line statement of what we'd expect and whether it's been probed, partially probed, or untouched.
+- **Key learnings at mechanism level, not config level**. Good: "Structural adapter changes (DoRA/rsLoRA/PiSSA) all collided with PEFT save/load contracts." Bad: "kv44 OOM'd at 94 GiB, kv45 regressed by 0.08."
+- Open research questions we have **not** yet answered.
+- Current best hypothesis for what's limiting the score.
+
+Main session owns `RESEARCH.md`. Update it only when strategic understanding genuinely shifts — not every iteration. Typical cadence: every 5-10 iterations, or whenever "what kind of thing could help" has changed. Keep it short (≤ 2 pages) — if it bloats, it starts leaking iteration noise and loses the abstraction advantage.
+
+**Innovation-subagent protocol**:
+- **Fires on cadence**: every ~10 iterations, OR when best score has been unchanged for N iterations (plateau), OR at explicit user request.
+- **Inputs**: ONLY `plan.md` + `RESEARCH.md`. Explicitly NOT `state.json`, `log.md`, `EXPERIMENTS.md`, `CURRENT_STATUS.md`, or any versioned artifact. Context hygiene is the whole point — don't leak the tunnel.
+- **Brief it as a senior external researcher** who has NOT been watching the iteration-by-iteration story. Ask for: directions not yet probed, mechanisms from adjacent literatures, reframings of the problem, and explicitly "what might we be collectively missing."
+- Allow `WebSearch` / `WebFetch` for external references.
+- **Output**: the subagent writes `suggestion.md` — proposed directions with brief rationale + rough cost/risk estimate per direction. Cap ≤ 800 words so it fits back into main session context.
+- **Main session reviews `suggestion.md`** and EITHER integrates a direction into the next iteration plan, OR flags it to the user when it implies scope change / rule-compliance judgment / resource requests.
+
+**When to use which**:
+- Brainstorm (tactical): "next iteration is a blank → what single-knob to try?" Reads full state. Output feeds the NEXT iteration.
+- Innovation (strategic): "we've been in this neighborhood too long → is the whole neighborhood wrong?" Reads only high-level map. Output may reshape the CAMPAIGN direction.
+
+Both are needed for long-horizon autoresearch. Running only the brainstorm hatch keeps you climbing the current hill; running only the innovation subagent loses tactical traction. Default: brainstorm on-demand when stuck, innovation on cadence every ~10 iterations regardless of state.
 
 **Each iteration (the subagent's 9 steps)**:
 1. Read `plan.md`, `CURRENT_STATUS.md`, `EXPERIMENTS.md`, and the latest gate log.
@@ -73,6 +104,8 @@ After the report lands, **pick the highest-EV direction yourself** and resume th
 - Decides next wake-up delay based on state (e.g. 20 min if a Kaggle kernel is running, 3 min if just analyzing).
 - Schedules via `CronCreate(durable: true, recurring: false)` with a prompt like `"继续 autoresearch 迭代 in <research_dir>"`.
 - Checks total elapsed against `budget_hours`. If exhausted → Phase 3.
+- **Maintains `RESEARCH.md`**: after the iteration report lands, decide whether the new result shifts the *strategic* picture (not just the score). If it reveals a mechanism-level learning (e.g. "this whole family of knobs is save/load-unsafe") OR closes/opens a hypothesis branch, update `RESEARCH.md`. Most iterations should NOT touch it — it's the map, not the trail.
+- **Fires the innovation subagent** on cadence (≈ every 10 iterations) or when score has plateaued. Input: only `plan.md` + `RESEARCH.md`. Output goes to `suggestion.md` for main session to review before the next iteration.
 
 ### Phase 3 — Wrap-up
 
@@ -84,14 +117,18 @@ Write `final_report.md` with: summary of all iterations, best result achieved vs
 <research_dir>/
   plan.md             # immutable after Phase 1 confirm, unless user re-opens planning
   state.json          # {session_id, phase, started_at, budget_hours, iteration_count, best_score, stop_reason_if_set}
+  RESEARCH.md         # high-level research map — hypothesis space + mechanism-level learnings. Short, abstract, updated ~every 5-10 iterations. The ONLY file the innovation subagent reads beyond plan.md.
   EXPERIMENTS.md      # append-only log, templates from experiment-ops-playbook
   CURRENT_STATUS.md   # single-page latest truth, templates from experiment-ops-playbook
   log.md              # append-only narrative of what main session did each turn
+  suggestion.md       # overwritten by each innovation-subagent run — fresh-context proposals for main session to review
   artifacts/          # versioned experiment files, result JSONs (*_expN_vNN.py, etc.)
   final_report.md     # only exists after Phase 3
 ```
 
 The rule: **if it's not in these files, it doesn't exist**. Never rely on session context to remember anything across iterations. A subagent launched five hours from now must be able to pick up the research from nothing but this folder.
+
+**Scope discipline for `RESEARCH.md`**: it is a map, not a log. Iteration numbers, run IDs, exact scores, config diffs — none of those belong in it; they go in `EXPERIMENTS.md` / `log.md` / `state.json`. `RESEARCH.md` answers "what's the *shape* of this problem and what have we *actually learned* about it" — so that someone reading it cold can propose fresh directions without being dragged into the same tunnel the iteration loop has been digging.
 
 ## Durability stack (against terminal close / SSH disconnect / reboot)
 
